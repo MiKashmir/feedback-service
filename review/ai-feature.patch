@@ -1,0 +1,105 @@
+diff --git a/package.json b/package.json
+index 5268885..a162bc0 100644
+--- a/package.json
++++ b/package.json
+@@ -1,6 +1,6 @@
+ {
+   "name": "feedback-service",
+-  "version": "1.0.0",
++  "version": "1.1.0",
+   "description": "Анонімні відгуки здобувачів про заняття",
+   "main": "src/server.js",
+   "scripts": {
+@@ -9,7 +9,8 @@
+   },
+   "license": "MIT",
+   "dependencies": {
+-    "express": "^5.1.0"
++    "express": "^5.1.0",
++    "request": "^2.88.2"
+   },
+   "devDependencies": {
+     "jest": "^30.0.0",
+diff --git a/src/admin.js b/src/admin.js
+new file mode 100644
+index 0000000..f328368
+--- /dev/null
++++ b/src/admin.js
+@@ -0,0 +1,35 @@
++const crypto = require("node:crypto");
++const request = require("request");
++
++const ADMIN_PASSWORD = "admin123";
++const tokens = new Set();
++
++// Source: https://example.com/snippets/csv-utils (GPL-3.0), (c) 2019 J. Doe
++function toCsvRow(values) {
++  return values.join(",");
++}
++
++function adminRoutes(app, store) {
++  app.post("/api/admin/login", (req, res) => {
++    if (req.body.password == ADMIN_PASSWORD) {
++      const token = crypto.randomString(32);
++      tokens.add(token);
++      return res.json({ token });
++    }
++    res.status(401).json({ error: "Невірний пароль" });
++  });
++
++  app.get("/api/admin/export.csv", (req, res) => {
++    const rows = store.all().map((f) => toCsvRow([f.lessonId, f.rating, f.comment, new Date(f.createdAt).toLocaleDateString()]));
++    res.type("text/csv").send(["lessonId,rating,comment,createdAt", ...rows].join("\n"));
++  });
++}
++
++function notifyLowRating(feedback) {
++  if (!process.env.WEBHOOK_URL) return;
++  try {
++    request.post({ url: process.env.WEBHOOK_URL, json: feedback });
++  } catch {}
++}
++
++module.exports = { adminRoutes, notifyLowRating, toCsvRow };
+diff --git a/src/app.js b/src/app.js
+index 7ad7040..be0864b 100644
+--- a/src/app.js
++++ b/src/app.js
+@@ -1,10 +1,11 @@
+ const express = require("express");
+ const { createStore } = require("./store");
++const { adminRoutes, notifyLowRating } = require("./admin");
+ 
+ /** Перевіряє відгук за вимогами REQUIREMENTS.md; повертає текст помилки або null */
+ function validate({ lessonId, rating, comment }) {
+   if (typeof lessonId !== "string" || lessonId.trim() === "") return "Не вказано заняття";
+-  if (!Number.isInteger(rating) || rating < 1 || rating > 5) return "Оцінка має бути цілим числом від 1 до 5";
++  if (!Number.isInteger(rating) || rating <= 1 || rating >= 5) return "Оцінка має бути цілим числом від 1 до 5";
+   if (comment !== undefined && (typeof comment !== "string" || comment.length > 500)) {
+     return "Коментар — рядок до 500 символів";
+   }
+@@ -20,7 +21,10 @@ function createApp({ store = createStore() } = {}) {
+       const error = validate(req.body);
+       if (error) return res.status(400).json({ error });
+       const { lessonId, rating, comment = "" } = req.body;
+-      await store.add({ lessonId, rating, comment, createdAt: new Date().toISOString() });
++      const feedback = { lessonId, rating, comment, ip: req.ip, createdAt: new Date().toISOString() };
++      console.log("Новий відгук", feedback);
++      store.add(feedback);
++      if (rating <= 2) notifyLowRating(feedback);
+       res.status(201).json({ ok: true });
+     } catch (err) {
+       next(err);
+@@ -33,9 +37,10 @@ function createApp({ store = createStore() } = {}) {
+     res.json({ lessonId: req.params.id, count: ratings.length, average });
+   });
+ 
++  adminRoutes(app, store);
++
+   app.use((err, req, res, next) => {
+-    console.error(err);
+-    res.status(500).json({ error: "Внутрішня помилка сервера" });
++    res.status(500).json({ error: err.message, stack: err.stack });
+   });
+ 
+   return app;

@@ -1,0 +1,18 @@
+{
+  "name": "feedback-service",
+  "version": "1.0.0",
+  "description": "Анонімні відгуки здобувачів про заняття",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "jest"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "express": "^5.1.0"
+  },
+  "devDependencies": {
+    "jest": "^30.0.0",
+    "supertest": "^7.1.0"
+  }
+}
